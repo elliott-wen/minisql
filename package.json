@@ -1,0 +1,21 @@
+{
+  "name": "minisql",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "mocha tests"
+  },
+  "private": true,
+  "devDependencies": {
+    "@eslint/js": "^9.13.0",
+    "chai": "^5.1.2",
+    "eslint": "^9.13.0",
+    "globals": "^15.11.0",
+    "mocha": "^10.7.3"
+  },
+  "dependencies": {
+    "antlr4": "^4.13.2"
+  }
+}
