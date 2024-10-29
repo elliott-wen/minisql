@@ -1,184 +1,201 @@
+// Create a custom visitor extending the generated visitor
 import SQLtinyVisitor from "./SQLtinyVisitor.js";
 
-export class SQLVisitor extends SQLtinyVisitor {
+export class ExecutionPlanVisitor extends SQLtinyVisitor {
+    constructor() {
+        super();
+        this.executionPlan = [];
+    }
 
     // Visit the simple_select_stmt rule in the grammar
     visitSimple_select_stmt(ctx) {
-        console.log("Visiting SIMPLE SELECT statement!");
-
         // Handle the WITH clause if present
         if (ctx.K_WITH()) {
-            console.log("WITH clause found!");
-
-            // Check if it's a recursive WITH clause
-            if (ctx.K_RECURSIVE()) {
-                console.log("WITH RECURSIVE clause found!");
-            }
-
-            // Visit each common table expression in the WITH clause
-            ctx.common_table_expression().forEach(cteCtx => {
-                this.visit(cteCtx);
-            });
+            let isRecursive = ctx.K_RECURSIVE() ? true : false;
+            this.visitWith_clause(ctx, isRecursive);
         }
 
         // Visit the select_core rule
         this.visit(ctx.select_core());
 
-        // Check if there is an ORDER BY clause
+        // Handle ORDER BY (handled last, right before the LIMIT)
         if (ctx.K_ORDER() && ctx.K_BY()) {
-            console.log("ORDER BY clause found!");
             let orderingTerms = ctx.ordering_term().map(orderCtx => orderCtx.getText());
-            console.log("Ordering Terms: ", orderingTerms);
+            this.executionPlan.push({
+                operation: "Sort",
+                orderBy: orderingTerms
+            });
         }
 
-        // Check if there is a LIMIT clause
+        // Handle LIMIT clause (final operation)
         if (ctx.K_LIMIT()) {
-            console.log("LIMIT clause found!");
+            let limitExpr = ctx.expr(0);  // First expr corresponds to LIMIT
+            let limitValue = limitExpr ? limitExpr.getText() : null;
+            let plan = { operation: "Limit", limit: limitValue };
 
-            // Extract the LIMIT value (first expr after LIMIT)
-            let limitValue = ctx.expr(0).getText();  // First expr corresponds to LIMIT
-            console.log("LIMIT: ", limitValue);
-
-            // Check if there is an OFFSET or a second LIMIT value
+            // Handle OFFSET or second limit
             if (ctx.expr(1)) {
-                let offsetOrSecondLimit = ctx.expr(1).getText();
-                if (ctx.K_OFFSET()) {
-                    console.log("OFFSET: ", offsetOrSecondLimit);  // OFFSET syntax
-                } else {
-                    console.log("Second LIMIT Value (comma syntax): ", offsetOrSecondLimit);  // Comma syntax
-                }
+                let offsetExpr = ctx.expr(1);
+                plan.offset = offsetExpr ? offsetExpr.getText() : null;
             }
+
+            this.executionPlan.push(plan);
         }
 
-        return null;
+        return this.executionPlan;
     }
 
     // Visit the select_core rule in the grammar
     visitSelect_core(ctx) {
-        console.log("Visiting SELECT CORE!");
+        // Correct logical order begins with FROM, JOIN, WHERE
 
-        // Handle SELECT DISTINCT or ALL
-        if (ctx.K_DISTINCT()) {
-            console.log("DISTINCT found!");
-        } else if (ctx.K_ALL()) {
-            console.log("ALL found!");
-        }
-
-        // Extract the selected columns
-        let columns = ctx.result_column().map(colCtx => colCtx.getText());
-        console.log("Selected Columns: ", columns);
-
-        // Handle the FROM clause
+        // Handle the FROM clause first (scanning tables or subqueries)
         if (ctx.K_FROM()) {
-            console.log("FROM clause found!");
+            ctx.table_or_subquery().forEach(tblCtx => {
+                this.visit(tblCtx);
+            });
 
-            // Check for tables or subqueries
-            if (ctx.table_or_subquery().length > 0) {
-                ctx.table_or_subquery().forEach(tblCtx => {
-                    this.visit(tblCtx);
-                });
-            }
-
-            // Check if there's a join_clause (alternatively to tables)
             if (ctx.join_clause()) {
-                console.log("JOIN Clause Found");
                 this.visit(ctx.join_clause());
             }
         }
 
-        // Handle the WHERE clause
+        // Handle the WHERE clause (applied after fetching data from tables)
         if (ctx.K_WHERE()) {
-            console.log("WHERE clause found!");
-            let whereExpr = ctx.expr();
-            console.log("WHERE Expression: ", whereExpr);
+            let whereExpr = ctx.expr(0) ? ctx.expr(0).getText() : null;
+            this.executionPlan.push({
+                operation: "Filter",
+                condition: whereExpr
+            });
         }
 
-        // Handle GROUP BY clause
+        // Handle GROUP BY (after WHERE, for grouping results)
         if (ctx.K_GROUP() && ctx.K_BY()) {
-            console.log("GROUP BY clause found!");
-            let groupByExprs = ctx.expr().map(exprCtx => exprCtx.getText());
-            console.log("Group By Expressions: ", groupByExprs);
+            let groupByExprs = ctx.expr().slice(0, ctx.expr().length).map(exprCtx => exprCtx.getText());
+            this.executionPlan.push({
+                operation: "Group",
+                groupBy: groupByExprs
+            });
 
-            // Handle HAVING clause (optional)
+            // Handle HAVING clause (after grouping)
             if (ctx.K_HAVING()) {
-                let havingExpr = ctx.expr().getText();
-                console.log("HAVING Expression: ", havingExpr);
+                let havingExpr = ctx.expr(ctx.expr().length - 1) ? ctx.expr(ctx.expr().length - 1).getText() : null;
+                this.executionPlan.push({
+                    operation: "Having",
+                    condition: havingExpr
+                });
             }
+        }
+
+        // After WHERE, GROUP BY, and HAVING, we handle SELECT (Projection)
+        let columns = ctx.result_column().map(colCtx => colCtx.getText());
+        this.executionPlan.push({
+            operation: "Projection",
+            columns: columns
+        });
+
+        // Handle DISTINCT (if needed, after projection)
+        if (ctx.K_DISTINCT()) {
+            this.executionPlan.push({ operation: "Distinct" });
+        }
+
+        // Handle VALUES clause if present (usually for INSERT statements)
+        if (ctx.K_VALUES()) {
+            let valuesList = ctx.expr().map(exprCtx => exprCtx.getText());
+            this.executionPlan.push({
+                operation: "Values",
+                values: valuesList
+            });
         }
 
         return null;
     }
 
-    // Visit the table_or_subquery rule
+    // Visit the table_or_subquery rule (handle table scans or subqueries)
     visitTable_or_subquery(ctx) {
-        console.log("Visiting TABLE OR SUBQUERY!");
+        let plan = {};
 
-        // Check for a database name and table name
-        if (ctx.database_name()) {
-            let databaseName = ctx.database_name().getText();
-            console.log("Database Name: ", databaseName);
-        }
-
+        // Check for a direct table reference
         if (ctx.table_name()) {
-            let tableName = ctx.table_name().getText();
-            console.log("Table Name: ", tableName);
+            plan.operation = "Table Scan";
+            plan.table = ctx.table_name().getText();
+
+            // Handle alias if present
+            if (ctx.table_alias()) {
+                plan.alias = ctx.table_alias().getText();
+            }
+
+            this.executionPlan.push(plan);
         }
 
-        // Handle alias if present
-        if (ctx.table_alias()) {
-            let tableAlias = ctx.table_alias().getText();
-            console.log("Table Alias: ", tableAlias);
+        // Handle subqueries wrapped in parentheses
+        if (ctx.select_stmt()) {
+            let subqueryPlan = new ExecutionPlanVisitor();  // Create a new visitor for the subquery
+            let subqueryResult = subqueryPlan.visit(ctx.select_stmt());
+
+            this.executionPlan.push({
+                operation: "Subquery",
+                plan: subqueryResult
+            });
         }
 
-        // Handle indexed by clause or not indexed
-        if (ctx.K_INDEXED() && ctx.K_BY()) {
-            let indexName = ctx.index_name().getText();
-            console.log("Indexed By: ", indexName);
-        } else if (ctx.K_NOT() && ctx.K_INDEXED()) {
-            console.log("Table is NOT INDEXED.");
-        }
-
-        // Handle nested subqueries or join clauses
+        // Handle nested table_or_subquery
         if (ctx.table_or_subquery()) {
-            console.log("Nested table_or_subquery found.");
             ctx.table_or_subquery().forEach(subqueryCtx => {
                 this.visit(subqueryCtx);
             });
         }
 
-        if (ctx.join_clause()) {
-            console.log("Nested JOIN clause found.");
-            this.visit(ctx.join_clause());
-        }
+        return null;
+    }
 
-        // Handle subqueries wrapped in parentheses
-        if (ctx.select_stmt()) {
-            console.log("Subquery (SELECT statement) found.");
-            this.visit(ctx.select_stmt());
+    // Visit the join_clause rule (handling joins between tables or subqueries)
+    visitJoin_clause(ctx) {
+        for (let i = 0; i < ctx.table_or_subquery().length; i++) {
+            let joinPlan = {
+                operation: "Join",
+                type: ctx.join_operator(i).getText(),
+                table: ctx.table_or_subquery(i + 1).getText()
+            };
+
+            // Add the join condition (ON/USING clause)
+            if (ctx.join_constraint(i)) {
+                joinPlan.on = ctx.join_constraint(i).getText();
+            }
+
+            this.executionPlan.push(joinPlan);
         }
 
         return null;
     }
 
-    // Visit the join_clause rule
-    visitJoin_clause(ctx) {
-        console.log("Visiting JOIN CLAUSE!");
+    // Visit subqueries (could handle more complex subquery logic here)
+    visitSelect_stmt(ctx) {
+        return this.visitSimple_select_stmt(ctx.simple_select_stmt());
+    }
 
-        // Visit each table_or_subquery involved in the join
-        this.visit(ctx.table_or_subquery(0));  // First table
-        for (let i = 1; i < ctx.table_or_subquery().length; i++) {
-            let joinOperator = ctx.join_operator(i - 1).getText();
-            console.log("Join Operator: ", joinOperator);
+    // Visit the WITH clause
+    visitWith_clause(ctx, isRecursive) {
+        let ctePlans = [];
 
-            this.visit(ctx.table_or_subquery(i));  // Joined table
+        // Mark the execution as recursive if K_RECURSIVE is present
+        let plan = {
+            operation: isRecursive ? "WITH RECURSIVE" : "WITH",
+            ctes: []
+        };
 
-            // Handle join constraints if present
-            if (ctx.join_constraint(i - 1)) {
-                let joinConstraint = ctx.join_constraint(i - 1).getText();
-                console.log("Join Constraint: ", joinConstraint);
-            }
-        }
+        // Visit each common table expression
+        ctx.common_table_expression().forEach(cteCtx => {
+            let cteName = cteCtx.table_name().getText();
+            let cteQueryPlan = new ExecutionPlanVisitor();
+            let subqueryPlan = cteQueryPlan.visit(cteCtx.select_stmt());
 
-        return null;
+            plan.ctes.push({
+                cteName: cteName,
+                subqueryPlan: subqueryPlan
+            });
+        });
+
+        this.executionPlan.push(plan);
     }
 }
