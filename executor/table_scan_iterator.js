@@ -1,24 +1,28 @@
-// table_scan_iterator.js
 export class TableScanIterator {
-    constructor(bufferManager, tableName) {
-        this.bufferManager = bufferManager;
+    constructor(tableName) {
         this.tableName = tableName;
-        this.currentPageId = 0;
+        this.currentIndex = 0;       // Track the current row index
+        // Mock table data for demonstration purposes
+        this.tableData = [
+            {name: 'Alice', age: 25},
+            {name: 'Bob', age: 35},
+            {name: 'Charlie', age: 40}
+        ];
     }
 
-    /**
-     * Returns the next row in the table.
-     * @return {Object|null} - Next row or null if end of table.
-     */
+    // Return the next row in the table
     next() {
-        // Implementation
+        if (this.currentIndex < this.tableData.length) {
+            const row = this.tableData[this.currentIndex];
+            this.currentIndex++;
+            return row;
+        } else {
+            return null;  // No more rows
+        }
     }
 
-    /**
-     * Checks if the iterator has more rows.
-     * @return {boolean} - Whether there are more rows.
-     */
+    // Check if there are more rows
     hasNext() {
-        // Implementation
+        return this.currentIndex < this.tableData.length;
     }
 }
