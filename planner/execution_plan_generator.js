@@ -1,5 +1,5 @@
 // Create a custom visitor extending the generated visitor
-import SQLtinyVisitor from "./SQLtinyVisitor.js";
+import SQLtinyVisitor from "../sql_parser/SQLtinyVisitor.js";
 
 export class ExecutionPlanVisitor extends SQLtinyVisitor {
     constructor() {
@@ -7,13 +7,13 @@ export class ExecutionPlanVisitor extends SQLtinyVisitor {
         this.executionPlan = [];
     }
 
+    /**
+     * @typedef {import("./teamMember").TeamMember} TeamMember
+     * @param {Array<TeamMember>} teamMembers - a list of team members
+     * @returns {Array<ExecutionPlan>}
+     */
     // Visit the simple_select_stmt rule in the grammar
     visitSimple_select_stmt(ctx) {
-        // Handle the WITH clause if present
-        if (ctx.K_WITH()) {
-            let isRecursive = ctx.K_RECURSIVE() ? true : false;
-            this.visitWith_clause(ctx, isRecursive);
-        }
 
         // Visit the select_core rule
         this.visit(ctx.select_core());
@@ -129,9 +129,9 @@ export class ExecutionPlanVisitor extends SQLtinyVisitor {
         }
 
         // Handle subqueries wrapped in parentheses
-        if (ctx.select_stmt()) {
+        if (ctx.simple_select_stmt()) {
             let subqueryPlan = new ExecutionPlanVisitor();  // Create a new visitor for the subquery
-            let subqueryResult = subqueryPlan.visit(ctx.select_stmt());
+            let subqueryResult = subqueryPlan.visit(ctx.simple_select_stmt());
 
             this.executionPlan.push({
                 operation: "Subquery",
@@ -169,33 +169,4 @@ export class ExecutionPlanVisitor extends SQLtinyVisitor {
         return null;
     }
 
-    // Visit subqueries (could handle more complex subquery logic here)
-    visitSelect_stmt(ctx) {
-        return this.visitSimple_select_stmt(ctx.simple_select_stmt());
-    }
-
-    // Visit the WITH clause
-    visitWith_clause(ctx, isRecursive) {
-        let ctePlans = [];
-
-        // Mark the execution as recursive if K_RECURSIVE is present
-        let plan = {
-            operation: isRecursive ? "WITH RECURSIVE" : "WITH",
-            ctes: []
-        };
-
-        // Visit each common table expression
-        ctx.common_table_expression().forEach(cteCtx => {
-            let cteName = cteCtx.table_name().getText();
-            let cteQueryPlan = new ExecutionPlanVisitor();
-            let subqueryPlan = cteQueryPlan.visit(cteCtx.select_stmt());
-
-            plan.ctes.push({
-                cteName: cteName,
-                subqueryPlan: subqueryPlan
-            });
-        });
-
-        this.executionPlan.push(plan);
-    }
 }

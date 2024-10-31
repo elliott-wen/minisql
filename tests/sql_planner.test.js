@@ -1,6 +1,6 @@
 import {expect} from 'chai';
 import {SQLParser} from '../sql_parser/sql_parser.js';
-import {ExecutionPlanVisitor} from '../sql_parser/sql_visitor.js';
+import {ExecutionPlanGenerator} from '../planner/execution_plan_generator.js';
 
 describe('SQLVisitor', () => {
     let sqlParser;
@@ -8,7 +8,7 @@ describe('SQLVisitor', () => {
 
     beforeEach(() => {
         sqlParser = new SQLParser();
-        sqlSelectVisitor = new ExecutionPlanVisitor();
+        sqlSelectVisitor = new ExecutionPlanGenerator();
     });
 
     it('should visit a basic SELECT query', () => {
